@@ -6,6 +6,7 @@ import { SPAWN } from "../world.js";
 import { levelFromXp, maxHealthForCombat } from "../skills.js";
 import { GAME_DATA } from "../data/gameData.js";
 import { VALID_ACTIONS } from "./validate.js";
+import { formatInventory } from "../ws/index.js";
 
 const router = Router();
 
@@ -21,15 +22,21 @@ router.get("/state", authMiddleware, async (req, res) => {
        FROM player_state WHERE user_id = :uid`,
     { uid },
   );
+
   const [actions] = await pool.execute(
     `SELECT action_name, tier, charges_remaining, times_coded, bound_key
        FROM action_progress WHERE user_id = :uid`,
     { uid },
   );
-  const [inventory] = await pool.execute(
+
+  // ✅ FIXED INVENTORY (important part)
+  const [rows] = await pool.execute(
     `SELECT item_name, quantity FROM inventory WHERE user_id = :uid`,
     { uid },
   );
+
+  const inventory = formatInventory(rows);
+
   const [quests] = await pool.execute(
     `SELECT quest_key FROM player_quests WHERE user_id = :uid`,
     { uid },
@@ -38,6 +45,7 @@ router.get("/state", authMiddleware, async (req, res) => {
   const combatXp = ps ? Number(ps.combat_xp) : 0;
   const survivalXp = ps ? Number(ps.survival_xp) : 0;
   const codingXp = ps ? Number(ps.coding_xp) : 0;
+
   const combatLevel = levelFromXp(combatXp);
   const maxHealth = maxHealthForCombat(combatLevel);
 
@@ -57,7 +65,7 @@ router.get("/state", authMiddleware, async (req, res) => {
       coding: { xp: codingXp, level: levelFromXp(codingXp) },
     },
     actions,
-    inventory,
+    inventory, // ✅ now uses the fixed version
     quests_done: quests.map((q) => q.quest_key),
     config: GAME_DATA,
   });

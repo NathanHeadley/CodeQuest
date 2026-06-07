@@ -215,27 +215,62 @@ async function handlePickup(ws, itemId) {
   const it = pickupItem(itemId, p.x, p.y, ws.userId);
   if (!it) return;
 
-  const itemDef = GAME_DATA.items[it.item];
+  const item = it.item;
+  const itemDef = GAME_DATA.items[item];
   const stackable = itemDef?.stackable === true;
 
+  const slots = await inventorySlotCount(ws.userId);
+
+  let canAdd = true;
+
+  if (slots >= 32) {
+    if (stackable) {
+      const [[existing]] = await pool.execute(
+        `SELECT id FROM inventory WHERE user_id = :uid AND item_name = :item LIMIT 1`,
+        { uid: ws.userId, item }
+      );
+      if (!existing) canAdd = false;
+    } else {
+      canAdd = false;
+    }
+  }
+
+  if (!canAdd) {
+    return send(ws, {
+      type: "notice",
+      text: "Your inventory is full.",
+    });
+  }
+
   if (stackable) {
-    await pool.execute(
-      `INSERT INTO inventory (user_id, item_name, quantity)
-       VALUES (:uid, :item, 1)
-       ON DUPLICATE KEY UPDATE quantity = quantity + 1`,
-      { uid: ws.userId, item: it.item }
+    const [[row]] = await pool.execute(
+      `SELECT id FROM inventory WHERE user_id = :uid AND item_name = :item LIMIT 1`,
+      { uid: ws.userId, item }
     );
+
+    if (row) {
+      await pool.execute(
+        `UPDATE inventory SET quantity = quantity + 1 WHERE id = :id`,
+        { id: row.id }
+      );
+    } else {
+      await pool.execute(
+        `INSERT INTO inventory (user_id, item_name, quantity)
+         VALUES (:uid, :item, 1)`,
+        { uid: ws.userId, item }
+      );
+    }
   } else {
     await pool.execute(
       `INSERT INTO inventory (user_id, item_name, quantity)
        VALUES (:uid, :item, 1)`,
-      { uid: ws.userId, item: it.item }
+      { uid: ws.userId, item }
     );
   }
 
   broadcastAll({ type: "item:gone", id: it.id });
   await sendInventory(ws);
-  send(ws, { type: "notice", text: `Picked up ${it.item}.` });
+  send(ws, { type: "notice", text: `Picked up ${item}.` });
 }
 
 // Woodcutting: need a hatchet, be next to the tree. Trees have HP and take hatchet
@@ -433,18 +468,19 @@ async function handleSell(ws, item) {
 
   const stackable = itemDef?.stackable === true;
 
+  // ✅ REMOVE ITEM
   if (stackable) {
     await pool.execute(
       `UPDATE inventory
        SET quantity = quantity - 1
-       WHERE user_id = :uid AND item_name = :item AND quantity > 0`,
-      { uid: ws.userId, item }
+       WHERE id = :id`,
+      { id: inv.id }
     );
 
     await pool.execute(
       `DELETE FROM inventory
-       WHERE user_id = :uid AND item_name = :item AND quantity <= 0`,
-      { uid: ws.userId, item }
+       WHERE id = :id AND quantity <= 0`,
+      { id: inv.id }
     );
   } else {
     await pool.execute(
@@ -453,13 +489,33 @@ async function handleSell(ws, item) {
     );
   }
 
-  // Give coins (always stackable)
-  await pool.execute(
-    `INSERT INTO inventory (user_id, item_name, quantity)
-     VALUES (:uid, 'coins', :p)
-     ON DUPLICATE KEY UPDATE quantity = quantity + :p`,
-    { uid: ws.userId, p: price }
+  // ✅ ADD COINS (FIXED)
+  const [coinRows] = await pool.execute(
+    `SELECT id, quantity FROM inventory WHERE user_id = :uid AND item_name = 'coins'`,
+    { uid: ws.userId }
   );
+
+  if (coinRows.length > 0) {
+    const total =
+      coinRows.reduce((sum, r) => sum + r.quantity, 0) + price;
+
+    await pool.execute(
+      `DELETE FROM inventory WHERE user_id = :uid AND item_name = 'coins'`,
+      { uid: ws.userId }
+    );
+
+    await pool.execute(
+      `INSERT INTO inventory (user_id, item_name, quantity)
+       VALUES (:uid, 'coins', :q)`,
+      { uid: ws.userId, q: total }
+    );
+  } else {
+    await pool.execute(
+      `INSERT INTO inventory (user_id, item_name, quantity)
+       VALUES (:uid, 'coins', :q)`,
+      { uid: ws.userId, q: price }
+    );
+  }
 
   await sendInventory(ws);
 
@@ -471,33 +527,103 @@ async function handleSell(ws, item) {
 
 // Buy one of a shop item for coins.
 async function handleBuy(ws, item) {
+  const itemDef = GAME_DATA.items[item];
+  if (!itemDef || itemDef.price == null) return;
+
   const shop = GAME_DATA.shops.shopkeeper;
   if (!shop.stock.includes(item)) return;
 
-  const itemDef = GAME_DATA.items[item];
   const cost = Math.round(itemDef.price * shop.buyMultiplier);
-  const [[c]] = await pool.execute(
-    `SELECT quantity FROM inventory WHERE user_id = :uid AND item_name = 'coins'`,
-    { uid: ws.userId },
+
+  // ✅ GET COINS
+  const [coinRows] = await pool.execute(
+    `SELECT id, quantity FROM inventory WHERE user_id = :uid AND item_name = 'coins'`,
+    { uid: ws.userId }
   );
-  if (!c || c.quantity < cost) {
-    return send(ws, { type: "notice", text: `Not enough coins — ${item} costs ${cost}.` });
+
+  const totalCoins = coinRows.reduce((sum, r) => sum + r.quantity, 0);
+
+  if (totalCoins < cost) {
+    return send(ws, {
+      type: "notice",
+      text: "You don't have enough coins.",
+    });
   }
-  if (c.quantity - cost <= 0) {
-    await pool.execute(`DELETE FROM inventory WHERE user_id = :uid AND item_name = 'coins'`, { uid: ws.userId });
-  } else {
+
+  const stackable = itemDef?.stackable === true;
+
+  const slots = await inventorySlotCount(ws.userId);
+
+  let canAdd = true;
+
+  if (slots >= 32) {
+    if (stackable) {
+      const [[existing]] = await pool.execute(
+        `SELECT id FROM inventory WHERE user_id = :uid AND item_name = :item LIMIT 1`,
+        { uid: ws.userId, item }
+      );
+      if (!existing) canAdd = false;
+    } else {
+      canAdd = false;
+    }
+  }
+
+  if (!canAdd) {
+    return send(ws, {
+      type: "notice",
+      text: "Your inventory is full.",
+    });
+  }
+
+  // ✅ REMOVE COINS (FIXED)
+  const remaining = totalCoins - cost;
+
+  await pool.execute(
+    `DELETE FROM inventory WHERE user_id = :uid AND item_name = 'coins'`,
+    { uid: ws.userId }
+  );
+
+  if (remaining > 0) {
     await pool.execute(
-      `UPDATE inventory SET quantity = quantity - :cost WHERE user_id = :uid AND item_name = 'coins'`,
-      { cost, uid: ws.userId },
+      `INSERT INTO inventory (user_id, item_name, quantity)
+       VALUES (:uid, 'coins', :q)`,
+      { uid: ws.userId, q: remaining }
     );
   }
-  await pool.execute(
-    `INSERT INTO inventory (user_id, item_name, quantity) VALUES (:uid, :item, 1)
-       ON DUPLICATE KEY UPDATE quantity = quantity + 1`,
-    { uid: ws.userId, item },
-  );
+
+  // ✅ ADD ITEM
+  if (stackable) {
+    const [[row]] = await pool.execute(
+      `SELECT id FROM inventory WHERE user_id = :uid AND item_name = :item LIMIT 1`,
+      { uid: ws.userId, item }
+    );
+
+    if (row) {
+      await pool.execute(
+        `UPDATE inventory SET quantity = quantity + 1 WHERE id = :id`,
+        { id: row.id }
+      );
+    } else {
+      await pool.execute(
+        `INSERT INTO inventory (user_id, item_name, quantity)
+         VALUES (:uid, :item, 1)`,
+        { uid: ws.userId, item }
+      );
+    }
+  } else {
+    await pool.execute(
+      `INSERT INTO inventory (user_id, item_name, quantity)
+       VALUES (:uid, :item, 1)`,
+      { uid: ws.userId, item }
+    );
+  }
+
   await sendInventory(ws);
-  send(ws, { type: "notice", text: `Bought ${item} for ${cost} coin${cost === 1 ? "" : "s"}.` });
+
+  send(ws, {
+    type: "notice",
+    text: `Bought ${item} for ${cost} coin${cost === 1 ? "" : "s"}.`,
+  });
 }
 
 async function sendInventory(ws) {
@@ -506,28 +632,7 @@ async function sendInventory(ws) {
     { uid: ws.userId }
   );
 
-  const items = [];
-
-  for (const r of rows) {
-    const itemDef = GAME_DATA.items[r.item_name];
-    const stackable = itemDef?.stackable === true;
-
-    if (stackable) {
-      items.push({
-        item_name: r.item_name,
-        quantity: r.quantity
-      });
-    } else {
-      // create ONE slot per item
-      for (let i = 0; i < r.quantity; i++) {
-        items.push({
-          item_name: r.item_name,
-          quantity: 1
-        });
-      }
-    }
-  }
-
+  const items = formatInventory(rows);
   send(ws, { type: "inventory", items });
 }
 
@@ -592,4 +697,138 @@ function broadcast(obj, excludeId) {
 function broadcastAll(obj) {
   const data = JSON.stringify(obj);
   for (const p of players.values()) if (p.ws.readyState === 1) p.ws.send(data);
+}
+
+async function inventorySlotCount(userId) {
+  const [rows] = await pool.execute(
+    `SELECT item_name, quantity FROM inventory WHERE user_id = :uid`,
+    { uid: userId }
+  );
+
+  let count = 0;
+
+  for (const r of rows) {
+    const itemDef = GAME_DATA.items[r.item_name];
+    const stackable = itemDef?.stackable === true;
+
+    if (stackable) {
+      count += 1; // one slot
+    } else {
+      count += r.quantity; // each item = one slot
+    }
+  }
+
+  return count;
+}
+
+async function addItem(userId, item, amount = 1) {
+  const itemDef = GAME_DATA.items[item];
+  const stackable = itemDef?.stackable === true;
+
+  if (stackable) {
+    const [[row]] = await pool.execute(
+      `SELECT id, quantity FROM inventory
+       WHERE user_id = :uid AND item_name = :item LIMIT 1`,
+      { uid: userId, item }
+    );
+
+    if (row) {
+      await pool.execute(
+        `UPDATE inventory
+         SET quantity = quantity + :amt
+         WHERE id = :id`,
+        { amt: amount, id: row.id }
+      );
+    } else {
+      await pool.execute(
+        `INSERT INTO inventory (user_id, item_name, quantity)
+         VALUES (:uid, :item, :amt)`,
+        { uid: userId, item, amt: amount }
+      );
+    }
+  } else {
+    for (let i = 0; i < amount; i++) {
+      await pool.execute(
+        `INSERT INTO inventory (user_id, item_name, quantity)
+         VALUES (:uid, :item, 1)`,
+        { uid: userId, item }
+      );
+    }
+  }
+}
+
+async function removeItem(userId, item, amount = 1) {
+  const itemDef = GAME_DATA.items[item];
+  const stackable = itemDef?.stackable === true;
+
+  if (stackable) {
+    const [[row]] = await pool.execute(
+      `SELECT id, quantity FROM inventory
+       WHERE user_id = :uid AND item_name = :item LIMIT 1`,
+      { uid: userId, item }
+    );
+
+    if (!row || row.quantity < amount) {
+      return false; // not enough to remove
+    }
+
+    const remaining = row.quantity - amount;
+
+    if (remaining > 0) {
+      await pool.execute(
+        `UPDATE inventory SET quantity = :q WHERE id = :id`,
+        { q: remaining, id: row.id }
+      );
+    } else {
+      await pool.execute(
+        `DELETE FROM inventory WHERE id = :id`,
+        { id: row.id }
+      );
+    }
+  } else {
+    const [rows] = await pool.execute(
+      `SELECT id FROM inventory
+       WHERE user_id = :uid AND item_name = :item
+       LIMIT :amt`,
+      { uid: userId, item, amt: amount }
+    );
+
+    if (rows.length < amount) {
+      return false; // not enough items
+    }
+
+    for (const r of rows) {
+      await pool.execute(
+        `DELETE FROM inventory WHERE id = :id`,
+        { id: r.id }
+      );
+    }
+  }
+
+  return true;
+}
+
+export function formatInventory(rows) {
+  const items = [];
+
+  for (const r of rows) {
+    const itemDef = GAME_DATA.items[r.item_name];
+    const stackable = itemDef?.stackable === true;
+
+    if (stackable) {
+      items.push({
+        item_name: r.item_name,
+        quantity: r.quantity
+      });
+    } else {
+      for (let i = 0; i < r.quantity; i++) {
+        items.push({
+          item_name: r.item_name,
+          quantity: 1
+        });
+      }
+    }
+  }
+
+  return items;
 }
