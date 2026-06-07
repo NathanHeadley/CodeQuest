@@ -4,6 +4,7 @@ import { verifyToken, upsertUser } from "../auth/jwt.js";
 import { pool } from "../db.js";
 import { SPAWN } from "../world.js";
 import { levelFromXp, maxHealthForCombat } from "../skills.js";
+import { GAME_DATA } from "../data/gameData.js";
 import {
   worldSnapshot,
   getEnemy,
@@ -25,8 +26,6 @@ const FIRE_XP = 40;
 const COOK_XP = 30;
 const EAT_HEAL = 5;
 const EDIBLE = new Set(["beef"]);
-const SELL_PRICES = { hatchet: 1, tinderbox: 1, log: 3, "raw beef": 1, cowhide: 2, wool: 1, pickaxe: 2, hammer: 1, ore: 5 };
-const SHOP_BUY = { pickaxe: 5, hammer: 3, knife: 3 }; // shop stock + price in coins
 
 // In-memory presence: userId -> { ws, x, y, name, totalLevel }
 const players = new Map();
@@ -212,13 +211,28 @@ async function handleAttack(ws, enemyId) {
 async function handlePickup(ws, itemId) {
   const p = players.get(ws.userId);
   if (!p) return;
+
   const it = pickupItem(itemId, p.x, p.y, ws.userId);
   if (!it) return;
-  await pool.execute(
-    `INSERT INTO inventory (user_id, item_name, quantity) VALUES (:uid, :item, 1)
+
+  const itemDef = GAME_DATA.items[it.item];
+  const stackable = itemDef?.stackable === true;
+
+  if (stackable) {
+    await pool.execute(
+      `INSERT INTO inventory (user_id, item_name, quantity)
+       VALUES (:uid, :item, 1)
        ON DUPLICATE KEY UPDATE quantity = quantity + 1`,
-    { uid: ws.userId, item: it.item },
-  );
+      { uid: ws.userId, item: it.item }
+    );
+  } else {
+    await pool.execute(
+      `INSERT INTO inventory (user_id, item_name, quantity)
+       VALUES (:uid, :item, 1)`,
+      { uid: ws.userId, item: it.item }
+    );
+  }
+
   broadcastAll({ type: "item:gone", id: it.id });
   await sendInventory(ws);
   send(ws, { type: "notice", text: `Picked up ${it.item}.` });
@@ -399,34 +413,69 @@ async function handleEat(ws, item) {
 
 // Sell one of an item to the shopkeeper for coins (no action/charge needed).
 async function handleSell(ws, item) {
-  const price = SELL_PRICES[item];
-  if (!price) return send(ws, { type: "notice", text: "The shopkeeper won't buy that." });
+  const itemDef = GAME_DATA.items[item];
+  if (!itemDef || itemDef.sellPrice == null) {
+    return send(ws, {
+      type: "notice",
+      text: "The shopkeeper won't buy that.",
+    });
+  }
+
+  const shop = GAME_DATA.shops.shopkeeper;
+  const price = Math.round(itemDef.sellPrice * shop.sellMultiplier);
+
   const [[inv]] = await pool.execute(
-    `SELECT quantity FROM inventory WHERE user_id = :uid AND item_name = :item`,
-    { uid: ws.userId, item },
+    `SELECT id, quantity FROM inventory WHERE user_id = :uid AND item_name = :item LIMIT 1`,
+    { uid: ws.userId, item }
   );
+
   if (!inv || inv.quantity < 1) return;
-  if (inv.quantity <= 1) {
-    await pool.execute(`DELETE FROM inventory WHERE user_id = :uid AND item_name = :item`, { uid: ws.userId, item });
+
+  const stackable = itemDef?.stackable === true;
+
+  if (stackable) {
+    await pool.execute(
+      `UPDATE inventory
+       SET quantity = quantity - 1
+       WHERE user_id = :uid AND item_name = :item AND quantity > 0`,
+      { uid: ws.userId, item }
+    );
+
+    await pool.execute(
+      `DELETE FROM inventory
+       WHERE user_id = :uid AND item_name = :item AND quantity <= 0`,
+      { uid: ws.userId, item }
+    );
   } else {
     await pool.execute(
-      `UPDATE inventory SET quantity = quantity - 1 WHERE user_id = :uid AND item_name = :item`,
-      { uid: ws.userId, item },
+      `DELETE FROM inventory WHERE id = :id`,
+      { id: inv.id }
     );
   }
+
+  // Give coins (always stackable)
   await pool.execute(
-    `INSERT INTO inventory (user_id, item_name, quantity) VALUES (:uid, 'coins', :p)
-       ON DUPLICATE KEY UPDATE quantity = quantity + :p`,
-    { uid: ws.userId, p: price },
+    `INSERT INTO inventory (user_id, item_name, quantity)
+     VALUES (:uid, 'coins', :p)
+     ON DUPLICATE KEY UPDATE quantity = quantity + :p`,
+    { uid: ws.userId, p: price }
   );
+
   await sendInventory(ws);
-  send(ws, { type: "notice", text: `Sold ${item} for ${price} coin${price === 1 ? "" : "s"}.` });
+
+  send(ws, {
+    type: "notice",
+    text: `Sold ${item} for ${price} coin${price === 1 ? "" : "s"}.`,
+  });
 }
 
 // Buy one of a shop item for coins.
 async function handleBuy(ws, item) {
-  const cost = SHOP_BUY[item];
-  if (!cost) return;
+  const shop = GAME_DATA.shops.shopkeeper;
+  if (!shop.stock.includes(item)) return;
+
+  const itemDef = GAME_DATA.items[item];
+  const cost = Math.round(itemDef.price * shop.buyMultiplier);
   const [[c]] = await pool.execute(
     `SELECT quantity FROM inventory WHERE user_id = :uid AND item_name = 'coins'`,
     { uid: ws.userId },
@@ -453,10 +502,33 @@ async function handleBuy(ws, item) {
 
 async function sendInventory(ws) {
   const [rows] = await pool.execute(
-    `SELECT item_name, quantity FROM inventory WHERE user_id = :uid ORDER BY item_name`,
-    { uid: ws.userId },
+    `SELECT item_name, quantity FROM inventory WHERE user_id = :uid`,
+    { uid: ws.userId }
   );
-  send(ws, { type: "inventory", items: rows });
+
+  const items = [];
+
+  for (const r of rows) {
+    const itemDef = GAME_DATA.items[r.item_name];
+    const stackable = itemDef?.stackable === true;
+
+    if (stackable) {
+      items.push({
+        item_name: r.item_name,
+        quantity: r.quantity
+      });
+    } else {
+      // create ONE slot per item
+      for (let i = 0; i < r.quantity; i++) {
+        items.push({
+          item_name: r.item_name,
+          quantity: 1
+        });
+      }
+    }
+  }
+
+  send(ws, { type: "inventory", items });
 }
 
 // Add Survival XP, tell the player, and update their broadcast total level if it changed.

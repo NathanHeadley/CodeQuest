@@ -4,6 +4,7 @@ import { authMiddleware } from "../auth/jwt.js";
 import { pool } from "../db.js";
 import { SPAWN } from "../world.js";
 import { levelFromXp, maxHealthForCombat } from "../skills.js";
+import { GAME_DATA } from "../data/gameData.js";
 import { VALID_ACTIONS } from "./validate.js";
 
 const router = Router();
@@ -58,6 +59,7 @@ router.get("/state", authMiddleware, async (req, res) => {
     actions,
     inventory,
     quests_done: quests.map((q) => q.quest_key),
+    config: GAME_DATA,
   });
 });
 

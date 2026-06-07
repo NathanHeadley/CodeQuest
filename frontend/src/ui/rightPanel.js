@@ -12,7 +12,6 @@ const ACTION_ORDER = [
   "attack", "pick_up", "chop", "mine", "use", "cook", "eat", "equip",
 ];
 const CLICK_ACTIONS = new Set(["use", "pick_up", "cook", "eat"]); // triggered by clicking, not a key
-const EDIBLE = new Set(["beef"]); // clicking an edible item eats it
 const td = (text, cls) => {
   const c = document.createElement("td");
   if (cls) c.className = cls;
@@ -210,13 +209,19 @@ export const right = {
         if (it.item_name === state.useSelection) slot.classList.add("sel");
         const hint = sellMode
           ? "  (click to sell)"
-          : EDIBLE.has(it.item_name)
+          : state.config.items[it.itemName]?.edible
             ? "  (click to eat)"
             : state.useSelection
               ? "  (click to use on)"
               : "  (click to use)";
         slot.title = `${it.item_name} ×${it.quantity}${hint}`;
-        slot.innerHTML = `${itemIcon(it.item_name)}<span class="inv-qty">${it.quantity}</span>`;
+        const itemDef = state.config.items[it.item_name];
+        const isStackable = itemDef?.stackable === true;
+
+        slot.innerHTML = `
+          ${itemIcon(it.item_name)}
+          ${isStackable && it.quantity > 1 ? `<span class="inv-qty">${it.quantity}</span>` : ""}
+        `;
         slot.addEventListener("click", () => this.onSlotClick(it.item_name));
       } else {
         slot.addEventListener("click", () => {
@@ -236,7 +241,7 @@ export const right = {
       const a = state.useSelection;
       state.useSelection = null;
       if (a !== itemName) bus.emit("interact", { a, b: itemName, targetId: null });
-    } else if (EDIBLE.has(itemName)) {
+    } else if (state.config.items[itemName]?.edible) {
       bus.emit("interact:eat", { item: itemName });
     } else {
       state.useSelection = itemName;

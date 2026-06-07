@@ -4,12 +4,6 @@
 import { bus, state } from "../core.js";
 import { itemIcon } from "../data/items.js";
 
-const STOCK = [
-  { item: "pickaxe", cost: 5 },
-  { item: "hammer", cost: 3 },
-  { item: "knife", cost: 3},
-];
-
 export const shop = {
   init() {
     document.getElementById("shop-close").addEventListener("click", () => bus.emit("shop:close"));
@@ -34,19 +28,38 @@ export const shop = {
   },
 
   render() {
-    const coins = state.inventory.find((i) => i.item_name === "coins")?.quantity || 0;
+    const coins = state.inventory.find(i => i.item_name === "coins")?.quantity || 0;
     document.getElementById("shop-coins").textContent = coins;
+
+    const shop = state.config?.shops?.shopkeeper;
+    if (!shop) return;
+
     const host = document.getElementById("shop-stock");
     host.innerHTML = "";
-    for (const s of STOCK) {
+
+    for (const itemName of shop.stock) {
+      const item = state.config.items[itemName];
+      const cost = Math.round(item.price * shop.buyMultiplier);
+
       const el = document.createElement("div");
-      const afford = coins >= s.cost;
+      const afford = coins >= cost;
+
       el.className = "shop-item" + (afford ? "" : " cant");
-      el.innerHTML =
-        `${itemIcon(s.item)}<div class="nm">${s.item}</div>` +
-        `<div class="cost">${s.cost} coin${s.cost === 1 ? "" : "s"}</div>`;
-      el.title = afford ? `Buy ${s.item} for ${s.cost}` : "Not enough coins";
-      el.addEventListener("click", () => bus.emit("shop:buy", { item: s.item }));
+
+      el.innerHTML = `
+        ${itemIcon(itemName)}
+        <span>${item.name}</span>
+        <span>${cost} coin${cost === 1 ? "" : "s"}</span>
+      `;
+
+      el.title = afford
+        ? `Buy ${item.name} for ${cost}`
+        : "Not enough coins";
+
+      el.addEventListener("click", () =>
+        bus.emit("shop:buy", { item: itemName })
+      );
+
       host.appendChild(el);
     }
   },

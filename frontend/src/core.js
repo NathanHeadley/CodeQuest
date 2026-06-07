@@ -63,8 +63,10 @@ export const state = {
   inventory: [], // [{ item_name, quantity }]
   questsDone: [], // completed quest keys
   useSelection: null, // inventory item currently selected for a "use" interaction
+  config: null,
 
   setFromServer(data) {
+    this.config = data.config;
     this.user = data.user;
     this.player = data.state;
     this.maxHealth = data.maxHealth ?? 10;
