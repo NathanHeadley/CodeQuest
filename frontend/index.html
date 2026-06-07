@@ -1,0 +1,106 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>CodeQuest</title>
+  <link rel="stylesheet" href="styles.css" />
+  <script src="https://cdn.jsdelivr.net/npm/phaser@3.80.1/dist/phaser.min.js"></script>
+</head>
+<body>
+  <div id="app">
+    <!-- World view -->
+    <div id="game" aria-label="Game world"></div>
+
+    <!-- Right panel: tabs for inventory / quest log / high scores, plus minimap -->
+    <aside id="right-panel">
+      <div id="map-wrap">
+        <div id="minimap" title="Minimap"></div>
+        <div id="hp-orb" title="Hitpoints">
+          <div id="hp-orb-fill"></div>
+          <span id="hp-orb-text">10/10</span>
+        </div>
+      </div>
+      <nav id="right-tabs">
+        <button class="tab active" data-tab="quest">Quests</button>
+        <button class="tab" data-tab="skills">Skills</button>
+        <button class="tab" data-tab="actions">Actions</button>
+        <button class="tab" data-tab="inventory">Items</button>
+        <button class="tab" data-tab="scores">Scores</button>
+      </nav>
+      <div class="tab-body" id="tab-quest">
+        <h3>Quest Log</h3>
+        <ul id="quest-list"></ul>
+        <h3>Current Quest</h3>
+        <div id="active-quest"></div>
+      </div>
+      <div class="tab-body hidden" id="tab-skills">
+        <h3>Skills</h3>
+        <div id="skills-body"></div>
+      </div>
+      <div class="tab-body hidden" id="tab-actions">
+        <h3>Actions</h3>
+        <div id="action-list"></div>
+      </div>
+      <div class="tab-body hidden" id="tab-inventory">
+        <h3>Inventory</h3>
+        <p id="sell-note" class="muted-note hidden">💰 Selling — click an item to sell it for coins.</p>
+        <div id="inventory-grid"></div>
+      </div>
+      <div class="tab-body hidden" id="tab-scores">
+        <h3>High Scores</h3>
+        <div id="scores-body"></div>
+      </div>
+    </aside>
+
+    <!-- Bottom context panel: dialogue OR code mode -->
+    <section id="bottom-panel">
+      <!-- Dialogue mode -->
+      <div id="dialogue-mode">
+        <div id="speaker"></div>
+        <div id="dialogue-text"></div>
+        <div id="dialogue-actions"></div>
+      </div>
+
+      <!-- Code mode -->
+      <div id="code-mode" class="hidden">
+        <div id="code-header">
+          <span id="code-title"></span>
+          <span id="code-tier"></span>
+        </div>
+        <div id="code-prompt"></div>
+        <div id="code-editor-wrap">
+          <textarea id="code-input" spellcheck="false" autocomplete="off"></textarea>
+        </div>
+        <div id="code-footer">
+          <span id="code-feedback"></span>
+          <button id="code-run">Run code</button>
+        </div>
+      </div>
+    </section>
+  </div>
+
+  <!-- Shop window (centred) -->
+  <div id="shop-window" class="hidden">
+    <div class="shop-box">
+      <div class="shop-head">
+        <h2>Shop</h2>
+        <button id="shop-close" title="Close shop">✕</button>
+      </div>
+      <div class="shop-coins">Your coins: <span id="shop-coins">0</span></div>
+      <div id="shop-stock"></div>
+      <p class="muted-note">Click an item to buy it. Sell your own items from the Inventory tab on the right.</p>
+    </div>
+  </div>
+
+  <!-- Overlay shown when there is no auth token -->
+  <div id="auth-overlay" class="hidden">
+    <div class="auth-box">
+      <h1>CodeQuest</h1>
+      <p id="auth-msg">Launch CodeQuest from joltcomputing.com to play.</p>
+    </div>
+  </div>
+
+  <script type="module" src="src/main.js"></script>
+</body>
+</html>

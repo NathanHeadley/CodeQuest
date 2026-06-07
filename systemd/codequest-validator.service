@@ -1,0 +1,22 @@
+[Unit]
+Description=CodeQuest Python AST code validator
+After=network.target
+
+[Service]
+Type=simple
+User=codequest
+Group=codequest
+WorkingDirectory=/var/www/codequest/validator
+ExecStart=/var/www/codequest/validator/venv/bin/gunicorn -w 1 -b 127.0.0.1:5001 validator:app
+Restart=on-failure
+RestartSec=3
+
+# Hardening -- the validator only parses strings; lock it down hard.
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=true
+PrivateTmp=true
+ReadOnlyPaths=/var/www/codequest/validator
+
+[Install]
+WantedBy=multi-user.target

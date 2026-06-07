@@ -1,0 +1,23 @@
+[Unit]
+Description=CodeQuest Node API + WebSocket server
+After=network.target mysql.service codequest-validator.service
+Wants=mysql.service codequest-validator.service
+
+[Service]
+Type=simple
+User=codequest
+Group=codequest
+WorkingDirectory=/var/www/codequest/backend
+EnvironmentFile=/var/www/codequest/backend/.env
+ExecStart=/usr/bin/node src/server.js
+Restart=on-failure
+RestartSec=3
+
+# Hardening
+NoNewPrivileges=true
+ProtectSystem=full
+ProtectHome=true
+PrivateTmp=true
+
+[Install]
+WantedBy=multi-user.target

@@ -1,0 +1,22 @@
+{
+  "name": "codequest-backend",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "CodeQuest Node API + WebSocket multiplayer server",
+  "scripts": {
+    "start": "node src/server.js",
+    "dev": "node --watch src/server.js"
+  },
+  "engines": {
+    "node": ">=22"
+  },
+  "dependencies": {
+    "dotenv": "^16.4.5",
+    "express": "^4.19.2",
+    "helmet": "^7.1.0",
+    "jsonwebtoken": "^9.0.2",
+    "mysql2": "^3.11.0",
+    "ws": "^8.18.0"
+  }
+}
